@@ -159,10 +159,10 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
         return float(self.controller.query('WFMO:XZERO?'))
 
     def get_xaxis(self):          \
-            self.data_start = self.get_data_start()
-            self.data_stop = self.get_data_stop()
-            df=(self.data_stop-self.data_start)/NPixels
-            X_axis = np.arange(self.data_start,self.data_stop,df)
+        self.data_start = self.get_data_start()
+        self.data_stop = self.get_data_stop()
+        df=(self.data_stop-self.data_start)/NPixels
+        X_axis = np.arange(self.data_start,self.data_stop,df)
         return X_axis
 
     def read_data(self,x_axis_out= False):
