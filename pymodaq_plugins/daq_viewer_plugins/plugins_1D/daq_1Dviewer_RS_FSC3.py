@@ -34,7 +34,7 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
     params= comon_parameters+[
             {'title': 'VISA:','name': 'VISA_ressources', 'type': 'list', 'values': com_ports },
             {'title': 'Id:', 'name': 'id', 'type': 'text', 'value': ""},
-            {'title': 'Channels:', 'name': 'channels', 'type': 'itemselect', 'value': dict(all_items=['CH1', 'CH2', 'CH3', 'CH4'], selected=['CH1'])},
+            {'title': 'RBW:', 'name': 'RBW', 'type': 'itemselect', 'value': dict(all_items=['CH1', 'CH2', 'CH3', 'CH4'], selected=['CH1'])},
 
             ]
 
@@ -90,12 +90,7 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
             self.status.initialized=False
             return self.status
 
-    def number_of_channel(self):
-        """Return the number of available channel on the scope (4 or 2)"""
-        if ':CH4:SCA' in self.get_setup_dict().keys():
-            return 4
-        else:
-            return 2
+
 
     def load_setup(self):
         l = self.controller.query('SET?')
@@ -111,6 +106,8 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
         if not hasattr(self, 'dico') or force_load:
             self.load_setup()
         return self.dico
+
+
 
     def commit_settings(self, param):
         """
@@ -149,64 +146,34 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
             *Naverage*      int       Number of values to average
             =============== ======== ===============================================
         """
-        data_tot=[]
+        data=[]
         x_axis = None
-        for ind, channel in enumerate(self.settings.child(('channels')).value()['selected']):
-            if ind == 0:
-                x_axis, data_tmp = self.read_channel_data(channel,x_axis_out= True)
-            else:
-                data_tmp = self.read_channel_data(channel,x_axis_out= False)
-            data_tot.append(data_tmp)
 
-        self.data_grabed_signal.emit([OrderedDict(name='Tektronix',data=data_tot, type='Data1D', x_axis= dict(data= x_axis ,label= 'Time', units= 's'))])
+        self.data_grabed_signal.emit([OrderedDict(name='R&S FSC3',data=data, type='Data1D', x_axis= dict(data= x_axis ,label= 'Frequency', units= 'Hz'))])
 
-
-    def get_out_waveform_horizontal_sampling_interval(self):
-        return float(self.controller.query('WFMO:XIN?'))
-
-    def get_out_waveform_horizontal_zero(self):
-        return float(self.controller.query('WFMO:XZERO?'))
-
-    def get_out_waveform_vertical_scale_factor(self):
-        return float(self.controller.query('WFMO:YMUlt?'))
-
-    def get_out_waveform_vertical_position(self):
-        return float(self.controller.query('WFMO:YOFf?'))
 
     def get_data_start(self):
-        return int(self.controller.query('DATA:START?'))
+        return float(self.controller.query('WFMO:XIN?'))
 
-    def get_horizontal_record_length(self):
-        return int(self.controller.query("horizontal:recordlength?"))
+    def get_get_data_stop(self):
+        return float(self.controller.query('WFMO:XZERO?'))
 
-    def get_data_stop(self):
-        return int(self.controller.query('DATA:STOP?'))
+    def get_xaxis(self):          \
+            self.data_start = self.get_data_start()
+            self.data_stop = self.get_data_stop()
+            df=(self.data_stop-self.data_start)/NPixels
+            X_axis = np.arange(self.data_start,self.data_stop,df)
+        return X_axis
 
-    def set_data_source(self, name):
-        self.controller.write('DAT:SOUR '+str(name))
-
-    def read_channel_data(self,channel,x_axis_out= False):
-        self.controller.write("DATA:ENCDG ASCII")
-        self.controller.write("DATA:WIDTH 2")
-        if channel is not None:
-            self.set_data_source(channel)
+    def read_data(self,x_axis_out= False):
+        NPixels=631
+        self.controller.write("Format real,32")
         self.offset = self.get_out_waveform_vertical_position()
         self.scale = self.get_out_waveform_vertical_scale_factor()
         if x_axis_out:
-            self.data_start = self.get_data_start()
-            self.data_stop = self.get_data_stop()
-            self.x_0 = self.get_out_waveform_horizontal_zero()
-            self.delta_x = self.get_out_waveform_horizontal_sampling_interval()
+            X_axis=self.get_xaxis()
 
-            X_axis = self.x_0 + np.arange(0, self.get_horizontal_record_length()) * self.delta_x
-
-        res = np.array(self.controller.query_ascii_values('CURVE?'))
-        #res = np.frombuffer(buffer, dtype=np.dtype('int16').newbyteorder('<'),
-        #                    offset=0)
-
-        # The output of CURVE? is scaled to the display of the scope
-        # The following converts the data to the right scale
-        Y_axis = (res - self.offset)*self.scale
+        Y_axis = np.array(self.controller.query_ascii_values('CURVE?'))
 
         if x_axis_out:
             return X_axis, Y_axis
