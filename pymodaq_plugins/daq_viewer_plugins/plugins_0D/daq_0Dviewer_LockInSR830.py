@@ -72,6 +72,7 @@ class DAQ_0DViewer_LockInSR830(DAQ_Viewer_base):
                         {'title': 'Load setup:', 'name': 'load_setup', 'type': 'bool', 'value': False},]}
                 ] },
             ]
+
     def __init__(self,parent=None,params_state=None):
         super(DAQ_0DViewer_LockInSR830,self).__init__(parent,params_state)
         self.controller=None
@@ -130,8 +131,12 @@ class DAQ_0DViewer_LockInSR830(DAQ_Viewer_base):
             else:
                 self.controller=self.VISA_rm.open_resource(self.settings.child(('VISA_ressources')).value())
 
+            # force correct read&wite termination
+            self.controller.write_termination = '\n'
+            self.controller.read_termination = '\n'
+
             self.controller.timeout=self.settings.child(('timeout')).value()
-            idn = self.controller.query('OUTX1;*IDN?;')
+            idn = self.controller.query('*IDN?;')
             idn = idn.rstrip('\n')
             idn = idn.rsplit(',')
             if len(idn)>=0:

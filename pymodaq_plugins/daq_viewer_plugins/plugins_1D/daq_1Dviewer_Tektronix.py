@@ -73,6 +73,7 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
 
             txt = self.controller.query('*IDN?')
             self.settings.child(('id')).setValue(txt)
+
             Nchannels = self.number_of_channel()
             if Nchannels == 2:
                 self.settings.child(('channels')).setValue(dict(all_items=['CH1', 'CH2'], selected=['CH1']))
