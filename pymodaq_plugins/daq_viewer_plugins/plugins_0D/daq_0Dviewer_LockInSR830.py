@@ -35,12 +35,11 @@ class DAQ_0DViewer_LockInSR830(DAQ_Viewer_base):
         *settings*
         ==================== ========================
     """
+
     data_grabed_signal=pyqtSignal(list)
     channels=['X', 'Y', 'MAG', 'PHA', 'Aux In 1', 'Aux In 2', 'Aux In 3', 'Aux In 4', 'Ref frequency', 'CH1 display', 'CH2 display']
 
-
-
-    ##checking VISA ressources
+    #checking VISA ressources
     try:
         from visa import ResourceManager
         VISA_rm=ResourceManager()
@@ -50,8 +49,7 @@ class DAQ_0DViewer_LockInSR830(DAQ_Viewer_base):
             if 'GPIB' in dev:
                 device = dev
                 break
-        
-       
+
     except Exception as e:
         devices=[]
         device=''

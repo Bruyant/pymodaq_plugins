@@ -30,7 +30,7 @@ setupOpts = dict(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Human Machine Interfaces",
         "Topic :: Scientific/Engineering :: Visualization",
-        "License :: OSI Approved :: MIT License",
+        "License :: CeCILL-B Free Software License Agreement (CECILL-B)",
         "Operating System :: OS Independent",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Software Development :: User Interfaces",
@@ -82,13 +82,7 @@ setup(
     #           'style': helpers.StyleCommand},
     packages=find_packages(),
     package_data={'': ['*.dll']},
-    install_requires = [
-        #'pymodaq>=1.1.1',
-        'pyvisa',
-        'pyDAQmx',
-        'opencv-python',
-
-        ],
+    install_requires = [],
     **setupOpts
 )
 

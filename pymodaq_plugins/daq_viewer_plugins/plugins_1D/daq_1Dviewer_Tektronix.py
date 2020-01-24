@@ -32,7 +32,7 @@ class DAQ_1DViewer_Tektronix(DAQ_Viewer_base):
 
 
     params= comon_parameters+[
-              {'title': 'VISA:','name': 'VISA_ressources', 'type': 'list', 'values': com_ports },
+            {'title': 'VISA:','name': 'VISA_ressources', 'type': 'list', 'values': com_ports },
             {'title': 'Id:', 'name': 'id', 'type': 'text', 'value': ""},
             {'title': 'Channels:', 'name': 'channels', 'type': 'itemselect', 'value': dict(all_items=['CH1', 'CH2', 'CH3', 'CH4'], selected=['CH1'])},
 
