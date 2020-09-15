@@ -5,7 +5,7 @@ import pymodaq.daq_utils.daq_utils as mylib
 from pymodaq.daq_viewer.utility_classes import DAQ_Viewer_base
 from easydict import EasyDict as edict
 from collections import OrderedDict
-from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo
+from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, DataFromPlugins, Axis
 from pymodaq.daq_viewer.utility_classes import comon_parameters
 class DAQ_2DViewer_Mock(DAQ_Viewer_base):
     """
@@ -23,6 +23,8 @@ class DAQ_2DViewer_Mock(DAQ_Viewer_base):
 
     params = comon_parameters+[{'title': 'Nimages colors:', 'name': 'Nimagescolor', 'type': 'int', 'value': 1 , 'default':1, 'min':0, 'max': 3},
             {'title': 'Nimages pannels:', 'name': 'Nimagespannel', 'type': 'int', 'value': 1 , 'default':0, 'min':0},
+            {'title': 'Threshold', 'name': 'threshold', 'type': 'int', 'value': 1, 'min': 0},
+            {'title': 'Bool', 'name': 'boolean', 'type': 'bool', 'value': False},
             {'name': 'rolling', 'type': 'int', 'value': 1, 'min': 0},
             {'name': 'Nx', 'type': 'int', 'value': 100 , 'default':100, 'min':1},
             {'name': 'Ny', 'type': 'int', 'value': 200 , 'default':200, 'min':1},
@@ -130,30 +132,30 @@ class DAQ_2DViewer_Mock(DAQ_Viewer_base):
         try:
 
             if self.settings.child(('controller_status')).value()=="Slave":
-                if controller is None: 
+                if controller is None:
                     raise Exception('no controller has been defined externally while this detector is a slave one')
                 else:
-                    self.controller=controller
+                    self.controller = controller
             else:
-                self.controller="Mock controller"
+                self.controller = "Mock controller"
 
-            self.x_axis=self.get_xaxis()
-            self.y_axis=self.get_yaxis()
+            self.x_axis = self.get_xaxis()
+            self.y_axis = self.get_yaxis()
 
             # initialize viewers with the future type of data
-            self.data_grabed_signal_temp.emit([OrderedDict(name='Mock1', data=[np.zeros((128,30))], type='Data2D'),])
+            self.data_grabed_signal_temp.emit(self.average_data(1))
                                                #OrderedDict(name='Mock3', data=[np.zeros((128,))], type='Data1D')])
 
-            self.status.x_axis=self.x_axis
-            self.status.y_axis=self.y_axis
-            self.status.initialized=True
-            self.status.controller=self.controller
+            self.status.x_axis = self.x_axis
+            self.status.y_axis = self.y_axis
+            self.status.initialized = True
+            self.status.controller = self.controller
             return self.status
 
         except Exception as e:
-            self.emit_status(ThreadCommand('Update_Status',[getLineInfo()+ str(e),'log']))
-            self.status.info=getLineInfo()+ str(e)
-            self.status.initialized=False
+            self.emit_status(ThreadCommand('Update_Status', [getLineInfo() + str(e), 'log']))
+            self.status.info = getLineInfo() + str(e)
+            self.status.initialized = False
             return self.status
 
     def close(self):
@@ -227,19 +229,20 @@ class DAQ_2DViewer_Mock(DAQ_Viewer_base):
             QThread.msleep(000)
             self.data_grabed_signal.emit(data)
 
-
-    def average_data(self,Naverage):
-        data=[] #list of image (at most 3 for red, green and blue channels)
-        data_tmp=np.zeros_like(self.image)
+    def average_data(self, Naverage):
+        data = []  # list of image (at most 3 for red, green and blue channels)
+        data_tmp = np.zeros_like(self.image)
         for ind in range(Naverage):
-            data_tmp+=self.set_Mock_data()
-        data_tmp=data_tmp/Naverage
+            data_tmp += self.set_Mock_data()
+        data_tmp = data_tmp / Naverage
+
+        data_tmp = data_tmp * (data_tmp >= self.settings.child('threshold').value())
         for ind in range(self.settings.child(('Nimagespannel')).value()):
-            datatmptmp=[]
+            datatmptmp = []
             for indbis in range(self.settings.child(('Nimagescolor')).value()):
                 datatmptmp.append(data_tmp)
-            data.append(OrderedDict(name='Mock2D_{:d}'.format(ind),data=datatmptmp, type='Data2D'))
-        #data.append(OrderedDict(name='Mock2D_1D',data=[np.mean(data_tmp,axis=0)], type='Data1D'))
+            data.append(DataFromPlugins(name='Mock2D_{:d}'.format(ind), data=datatmptmp, dim='Data2D'))
+        # data.append(OrderedDict(name='Mock2D_1D',data=[np.mean(data_tmp,axis=0)], type='Data1D'))
         return data
 
     def stop(self):

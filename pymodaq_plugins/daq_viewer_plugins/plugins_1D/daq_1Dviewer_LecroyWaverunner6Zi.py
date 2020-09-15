@@ -1,6 +1,6 @@
 from PyQt5.QtCore import pyqtSignal
 from easydict import EasyDict as edict
-from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo
+from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, DataFromPlugins, Axis
 from pymodaq.daq_viewer.utility_classes import DAQ_Viewer_base
 from collections import OrderedDict
 import numpy as np
@@ -180,11 +180,11 @@ class DAQ_1DViewer_LecroyWaverunner6Zi(DAQ_Viewer_base):
         x_axis = np.array(waveform[0])
         data = [np.array(waveform[1])]
 
-        self.data_grabed_signal.emit([OrderedDict(
-            name = 'Lecroy Waverunner 6Zi',
-            data = data,
-            type = 'Data1D',
-            x_axis = dict(data=x_axis, label='Time', units='s')
+        self.data_grabed_signal.emit([DataFromPlugins(
+            name='Lecroy Waverunner 6Zi',
+            data=data,
+            dim='Data1D',
+            x_axis=Axis(data=x_axis, label='Time', units='s')
         )])
 
     def stop(self):
@@ -200,3 +200,4 @@ class DAQ_1DViewer_LecroyWaverunner6Zi(DAQ_Viewer_base):
 
         # disconnect the interface with the scope
         self.controller.Disconnect()
+

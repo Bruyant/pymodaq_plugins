@@ -54,7 +54,7 @@ class DAQ_Move_PI(DAQ_Move_base):
                 if flag:
                     break
 
-            gcs_device = GCSDevice(gcsdll=os.path.join(GCS_path_tmp,dll_name))
+            gcs_device = GCSDevice(gcsdll=os.path.join(GCS_path_tmp, dll_name))
             devices = gcs_device.EnumerateUSB()
             GCS_path = GCS_path_tmp
         except Exception as e:
@@ -62,10 +62,10 @@ class DAQ_Move_PI(DAQ_Move_base):
 
     import serial.tools.list_ports as list_ports
     devices.extend([str(port) for port in list(list_ports.comports())])
-    is_multiaxes=False
-    stage_names=[]
+    is_multiaxes = True
+    stage_names = []
 
-    params= [{'title': 'GCS2 library:', 'name': 'gcs_lib', 'type': 'browsepath', 'value': os.path.join(GCS_path_tmp,dll_name), 'filetype': True},
+    params = [{'title': 'GCS2 library:', 'name': 'gcs_lib', 'type': 'browsepath', 'value': os.path.join(GCS_path_tmp,dll_name), 'filetype': True},
            {'title': 'Connection_type:', 'name': 'connect_type', 'type': 'list', 'value':'USB', 'values': ['USB', 'TCP/IP' , 'RS232']},
            {'title': 'Devices:', 'name': 'devices', 'type': 'list', 'values': devices},
            {'title': 'Daisy Chain Options:', 'name': 'dc_options', 'type': 'group', 'children': [
@@ -77,11 +77,11 @@ class DAQ_Move_PI(DAQ_Move_base):
            {'title': 'Use Joystick:', 'name': 'use_joystick', 'type': 'bool', 'value': False},
              {'title': 'Closed loop?:', 'name': 'closed_loop', 'type': 'bool', 'value': True},
            {'title': 'Controller ID:', 'name': 'controller_id', 'type': 'str', 'value': '', 'readonly': True},
-           {'title': 'Stage address:', 'name': 'axis_address', 'type': 'list'},
+           #{'title': 'Stage address:', 'name': 'axis_address', 'type': 'list'},
           {'title': 'MultiAxes:', 'name': 'multiaxes', 'type': 'group','visible':is_multiaxes, 'children':[
                     {'title': 'is Multiaxes:', 'name': 'ismultiaxes', 'type': 'bool', 'value': is_multiaxes, 'default': False},
                     {'title': 'Status:', 'name': 'multi_status', 'type': 'list', 'value': 'Master', 'values': ['Master','Slave']},
-                    {'title': 'Axis:', 'name': 'axis', 'type': 'list',  'values':stage_names},
+                    {'title': 'Axis:', 'name': 'axis', 'type': 'list',  'values': stage_names},
 
                     ]}]+comon_parameters
 
@@ -137,12 +137,12 @@ class DAQ_Move_PI(DAQ_Move_base):
 
 
                 pass
-            elif param.name() == 'axis_address':
+            elif param.name() == 'axis':
                 self.settings.child(('closed_loop')).setValue(self.controller.qSVO(param.value())[param.value()])
-                self.set_referencing(self.settings.child(('axis_address')).value())
+                self.set_referencing(self.settings.child('multiaxes', 'axis').value())
 
             elif param.name()=='closed_loop':
-                axe=self.settings.child(('axis_address')).value()
+                axe=self.settings.child('multiaxes', 'axis').value()
                 if self.controller.qSVO(axe)[axe] != self.settings.child(('closed_loop')).value():
                     self.controller.SVO(axe,param.value())
 
@@ -224,6 +224,7 @@ class DAQ_Move_PI(DAQ_Move_base):
             #self.settings.child(('gcs_lib')).setValue(dll_path_tot)
             dll_path_tot = self.settings.child(('gcs_lib')).value()
         self.controller = GCSDevice(gcsdll=dll_path_tot)
+        self.enumerate_devices()
 
     def check_dll_exist(self, dll_name):
         files=os.listdir(os.path.split(self.settings.child(('gcs_lib')).value())[0])
@@ -278,9 +279,9 @@ class DAQ_Move_PI(DAQ_Move_base):
                 else:
                     self.controller = controller
             else: #Master stage
-                self.ini_device()#create a fresh and new instance of GCS device (in case multiple instances of DAQ_MOVE_PI are opened)
+                self.ini_device() #create a fresh and new instance of GCS device (in case multiple instances of DAQ_MOVE_PI are opened)
 
-                device=self.settings.child(('devices')).value()
+                device = self.settings.child(('devices')).value()
                 if not self.settings.child('dc_options','is_daisy').value(): #simple connection
                     if self.settings.child(('connect_type')).value()=='USB':
                         self.controller.ConnectUSB(device)
@@ -305,7 +306,7 @@ class DAQ_Move_PI(DAQ_Move_base):
                     self.controller.ConnectDaisyChainDevice(self.settings.child('dc_options','index_in_chain').value()+1,self.settings.child('dc_options','daisy_id').value())
 
             self.settings.child(('controller_id')).setValue(self.controller.qIDN())
-            self.settings.child(('axis_address')).setLimits(self.controller.axes)
+            self.settings.child('multiaxes', 'axis').setLimits(self.controller.axes)
 
             self.set_referencing(self.controller.axes[0])
 
@@ -359,14 +360,14 @@ class DAQ_Move_PI(DAQ_Move_base):
             ============== ============== ===========================================
         """
         try:
-            if type(axes) is not list:
-                axes=[axes]
+            if not isinstance(axes, list):
+                axes = [axes]
             for axe in axes:
                 #set referencing mode
-                if type(axe) is str:
+                if isinstance(axe, str):
                     if self.is_referenced(axe):
                         if self.controller.HasRON():
-                            self.controller.RON(axe,True)
+                            self.controller.RON(axe, True)
                         self.controller.FRF(axe)
         except Exception as e:
             self.emit_status(ThreadCommand('Update_Status',[getLineInfo()+ str(e)+" / Referencing not enabled with this dll",'log']))
@@ -397,12 +398,11 @@ class DAQ_Move_PI(DAQ_Move_base):
             --------
             DAQ_Move_base.get_position_with_scaling, daq_utils.ThreadCommand
         """
-        self.set_referencing(self.settings.child(('axis_address')).value())
-        pos_dict=self.controller.qPOS(self.settings.child(('axis_address')).value())
-        pos=pos_dict[self.settings.child(('axis_address')).value()]
-        pos=self.get_position_with_scaling(pos)
-        self.current_position=pos
-        self.emit_status(ThreadCommand('check_position',[pos]))
+        pos_dict = self.controller.qPOS(self.settings.child('multiaxes', 'axis').value())
+        pos = pos_dict[self.settings.child('multiaxes', 'axis').value()]
+        pos = self.get_position_with_scaling(pos)
+        self.current_position = pos
+        self.emit_status(ThreadCommand('check_position', [pos]))
         return pos
 
     def move_Abs(self,position):
@@ -425,7 +425,7 @@ class DAQ_Move_PI(DAQ_Move_base):
         self.target_position=position
 
         position=self.set_position_with_scaling(position)
-        out=self.controller.MOV(self.settings.child(('axis_address')).value(),position)
+        out=self.controller.MOV(self.settings.child('multiaxes', 'axis').value(),position)
 
         self.poll_moving()
 
@@ -445,13 +445,13 @@ class DAQ_Move_PI(DAQ_Move_base):
             DAQ_Move_base.set_position_with_scaling, DAQ_Move_PI.set_referencing, DAQ_Move_base.poll_moving
 
         """
-        position=self.check_bound(self.current_position+position)-self.current_position
-        self.target_position=position+self.current_position
+        position = self.check_bound(self.current_position+position)-self.current_position
+        self.target_position = position+self.current_position
 
         position = self.set_position_relative_with_scaling(position)
 
         if self.controller.HasMVR():
-            out=self.controller.MVR(self.settings.child(('axis_address')).value(),position)
+            out = self.controller.MVR(self.settings.child('multiaxes', 'axis').value(),position)
         else:
             self.move_Abs(self.target_position)
         self.poll_moving()
@@ -463,11 +463,11 @@ class DAQ_Move_PI(DAQ_Move_base):
             --------
             DAQ_Move_PI.set_referencing, DAQ_Move_base.poll_moving
         """
-        self.set_referencing(self.settings.child(('axis_address')).value())
+        self.set_referencing(self.settings.child('multiaxes', 'axis').value())
         if self.controller.HasGOH():
-            self.controller.GOH(self.settings.child(('axis_address')).value())
+            self.controller.GOH(self.settings.child('multiaxes', 'axis').value())
         elif self.controller.HasFRF():
-            self.controller.FRF(self.settings.child(('axis_address')).value())
+            self.controller.FRF(self.settings.child('multiaxes', 'axis').value())
         else:
             self.move_Abs(0)
         self.poll_moving()

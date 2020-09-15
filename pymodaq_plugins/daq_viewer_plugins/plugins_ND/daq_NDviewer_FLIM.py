@@ -1,3 +1,11 @@
+"""
+requires:
+fast-histogram : to process histograms in TTTR mode
+scikit-image : to correct for scanner drifts in quick FLIM acquisition
+"""
+
+
+
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSlot, QObject, pyqtSignal
 import numpy as np
@@ -5,7 +13,8 @@ import os
 from easydict import EasyDict as edict
 import ctypes
 from collections import OrderedDict
-from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, ScanParameters, zeros_aligned, extract_TTTR_histo_every_pixels
+from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, zeros_aligned, DataFromPlugins, Axis
+from pymodaq.daq_utils.scanner import ScanParameters
 
 from pyqtgraph.parametertree import Parameter, ParameterTree
 import pyqtgraph.parametertree.parameterTypes as pTypes
@@ -17,6 +26,7 @@ import time
 
 # find available COM ports
 import serial.tools.list_ports
+from skimage.feature import register_translation
 
 ports = [str(port)[0:4] for port in list(serial.tools.list_ports.comports())]
 port = 'COM6' if 'COM6' in ports else ports[0] if len(ports) > 0 else ''
@@ -27,6 +37,10 @@ stage_params = [{'title': 'Stage Settings:', 'name': 'stage_settings', 'type': '
                     {'title': 'Controller Info:', 'name': 'controller_id', 'type': 'text', 'value': '', 'readonly': True},
                     {'title': 'COM Port:', 'name': 'com_port', 'type': 'list', 'values': ports, 'value': port},
                     {'title': 'Time interval (ms):', 'name': 'time_interval', 'type': 'int', 'value': 20},
+                    {'title': 'Move at:', 'name': 'move_at', 'type': 'group', 'expanded': True, 'children': [
+                        {'title': 'X pos (µm):', 'name': 'move_at_x', 'type': 'float', 'value': 0},
+                        {'title': 'Y pos (µm):', 'name': 'move_at_y', 'type': 'float', 'value': 0},
+                        ]},
                     {'title': 'Stage X:', 'name': 'stage_x', 'type': 'group', 'expanded': True, 'children': [
                         {'title': 'Axis:', 'name': 'stage_x_axis', 'type': 'list', 'value': 'Y', 'values': ['X', 'Y']},
                         {'title': 'Direction:', 'name': 'stage_x_direction', 'type': 'list', 'value': 'Inverted', 'values': ['Normal', 'Inverted']},
@@ -39,6 +53,7 @@ stage_params = [{'title': 'Stage Settings:', 'name': 'stage_settings', 'type': '
                         ]},
 
                     ]}]
+
 
 class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
     """
@@ -86,7 +101,13 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
 
             elif param.name() == 'show_navigator':
                 self.emit_status(ThreadCommand('show_navigator'))
+                self.emit_status(ThreadCommand('show_scanner'))
                 param.setValue(False)
+
+            elif param.name() in custom_tree.iter_children(self.settings.child('stage_settings', 'move_at'), []):
+                pos_x = self.settings.child('stage_settings', 'move_at', 'move_at_x').value()
+                pos_y = self.settings.child('stage_settings', 'move_at', 'move_at_y').value()
+                self.move_at_navigator(pos_x, pos_y)
 
     def emit_data(self):
         """
@@ -98,11 +119,15 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
 
             elif mode == 'FLIM':
                 self.stop_scanner.emit()
-                self.data_grabed_signal.emit([OrderedDict(name='TH260', data=self.datas, type='DataND', nav_axes=(0, 1),
+                self.h5saver.h5_file.flush()
+                datas = self.process_histo_from_h5_and_correct_shifts(self.Nx, self.Ny, channel=0, marker=65)
+                self.data_grabed_signal.emit([DataFromPlugins(name='TH260', data=datas, dim='DataND', nav_axes=(0, 1),
                                                           nav_x_axis=self.get_nav_xaxis(),
                                                           nav_y_axis=self.get_nav_yaxis(),
-                                                          xaxis=self.get_xaxis())])
+                                                          xaxis=self.get_xaxis(),
+                                                          external_h5=self.h5saver.h5_file)])
                 self.stop()
+
 
         except Exception as e:
             self.emit_status(ThreadCommand('Update_Status', [getLineInfo() + str(e), 'log']))
@@ -117,7 +142,7 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
 
             elif mode == 'FLIM':
 
-                self.data_grabed_signal_temp.emit([OrderedDict(name='TH260', data=self.datas, type='DataND', nav_axes=(0, 1),
+                self.data_grabed_signal_temp.emit([DataFromPlugins(name='TH260', data=self.datas, dim='DataND', nav_axes=(0, 1),
                                                           nav_x_axis=self.get_nav_xaxis(),
                                                           nav_y_axis=self.get_nav_yaxis(),
                                                           xaxis=self.get_xaxis())])
@@ -126,27 +151,57 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
             self.emit_status(ThreadCommand('Update_Status', [getLineInfo() + str(e), 'log']))
 
 
-    def process_histo_from_h5(self, Nx=1, Ny=1, channel=0, marker=65):
-        mode = self.settings.child('acquisition', 'acq_type').value()
-        if mode == 'Counting' or mode == 'Histo' or mode == 'T3':
-            datas = super(DAQ_2DViewer_FLIM, self).process_histo_from_h5(Nx, Ny, channel)
-            return datas
-        else:
-            markers_array = self.h5file.get_node('/markers')
-            ind_lines = np.squeeze(np.where(self.h5file.get_node('/markers')[self.ind_reading:] == marker))
-            if ind_lines.size == 0:
-                return np.zeros_like(self.datas)  # basically do nothing
-            else:
-                ind_last_line = ind_lines[-1]
-            print(self.ind_reading, ind_last_line)
-            markers = markers_array[self.ind_reading:self.ind_reading+ind_last_line]
-            nanotimes = self.h5file.get_node('/nanotimes')[self.ind_reading:self.ind_reading+ind_last_line]
+    def process_histo_from_h5_and_correct_shifts(self, Nx=1, Ny=1, channel=0, marker=65):
+        """
+        Specific method to correct for drifts between various scans performed using the quick scans feature
+        Parameters
+        ----------
+        Nx
+        Ny
+        channel
+        marker
 
-            nbins = self.settings.child('acquisition', 'timings', 'nbins').value()
-            datas = extract_TTTR_histo_every_pixels(nanotimes, markers, marker=marker, Nx=Nx, Ny=Ny,
-                                            Ntime=nbins, ind_line_offset=self.ind_reading, channel=channel)
-            self.ind_reading = ind_last_line
-            return datas
+        Returns
+        -------
+
+        """
+        Nbins = self.settings.child('acquisition', 'timings', 'nbins').value()
+        time_window = Nbins
+
+        markers_array = self.h5saver.h5_file.get_node('/markers')
+        nanotime_array = self.h5saver.h5_file.get_node('/nanotimes')
+        datas = np.zeros((Nx, Ny, Nbins))
+        intensity_map_ref = np.zeros((Nx, Ny), dtype=np.int64)
+        ind_lines = np.where(markers_array.read() == marker)[0]
+        indexes_reading = ind_lines[::Nx * Ny][1:]
+        Nreadings = len(indexes_reading)
+
+        ind_reading = 0
+        ind_offset = 0
+
+        for ind in range(Nreadings):
+
+            if len(ind_lines) > 2:
+                ind_last_line = ind_lines[-1]
+                markers_tmp = markers_array[ind_reading:ind_reading + ind_last_line]
+                nanotimes_tmp = nanotime_array[ind_reading:ind_reading + ind_last_line]
+
+                # datas array is updated within this method
+                datas_tmp = self.extract_TTTR_histo_every_pixels(nanotimes_tmp, markers_tmp,
+                                                     marker=marker, Nx=Nx, Ny=Ny, Ntime=Nbins,
+                                                     ind_line_offset=ind_offset, channel=channel,
+                                                     time_window=time_window)
+                intensity_map = np.squeeze(np.sum(datas_tmp, axis=2))
+                if ind == 0:
+                    intensity_map_ref = intensity_map
+                ind_offset += len(ind_lines) - 2
+                ind_reading += ind_lines[-2]
+
+            #correct for shifts in x or y during collections and multiple scans of the same area
+            shift, error, diffphase = register_translation(intensity_map_ref, intensity_map, 1)
+            datas += np.roll(datas_tmp, [int(s) for s in shift], (0, 1))
+
+        return datas
 
     def ini_detector(self, controller=None):
         """
@@ -173,9 +228,9 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
     @pyqtSlot(ScanParameters)
     def update_scanner(self, scan_parameters):
         self.scan_parameters = scan_parameters
-        self.x_axis = self.scan_parameters.axis_2D_1
+        self.x_axis = self.scan_parameters.axes_unique[0]
         self.Nx = self.x_axis.size
-        self.y_axis = self.scan_parameters.axis_2D_2
+        self.y_axis = self.scan_parameters.axes_unique[1]
         self.Ny = self.y_axis.size
 
 
@@ -213,15 +268,18 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
         self.move_abs(posy, 'Y')
 
     def move_abs(self, position, axis='X'):
-        offset = self.settings.child('stage_settings', 'stage_x', 'offset_x').value()
-        if self.settings.child('stage_settings', 'stage_x', 'stage_x_direction').value() == 'Normal':
+        stage = f'stage_{axis}'.lower()
+        stage_axis = f'stage_{axis}_axis'.lower()
+        offset_stage = f'offset_{axis}'.lower()
+        stage_dir = f'stage_{axis}_direction'.lower()
+
+        offset = self.settings.child('stage_settings', stage, offset_stage).value()
+        if self.settings.child('stage_settings', stage, stage_dir).value() == 'Normal':
             posi = position + offset
         else:
             posi = -position + offset
-        if axis == 'X':
-            ax = self.settings.child('stage_settings', 'stage_x', 'stage_x_axis').value()
-        else:
-            ax = self.settings.child('stage_settings', 'stage_y', 'stage_y_axis').value()
+
+        ax = self.settings.child('stage_settings', stage, stage_axis).value()
         pos = Position(ax, int(posi * 1000), unit='n')
         out = self.stage.move_axis('ABS', pos)
 
@@ -264,7 +322,7 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
                 self.controller.TH260_Initialize(self.device, mode=3)  # mode T3
                 self.controller.TH260_SetMarkerEnable(self.device, 1)
                 self.datas = np.zeros((10, 10, 1024))
-                self.data_grabed_signal_temp.emit([OrderedDict(name='TH260', data=self.datas, nav_axes=[0, 1], type='DataND')])
+                self.data_grabed_signal_temp.emit([DataFromPlugins(name='TH260', data=self.datas, nav_axes=[0, 1], dim='DataND')])
 
                 self.data_pointers = self.datas.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
                 self.actual_mode = mode
@@ -294,12 +352,12 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
 
             elif mode == 'FLIM':
                 self.ind_reading = 0
+                self.ind_offset = 0
                 self.do_process_tttr = False
 
                 self.init_h5file()
                 self.datas = np.zeros((self.Nx, self.Ny, self.settings.child('acquisition', 'timings', 'nbins').value(),),
                                        dtype=np.float64)
-                self.init_histo_group()
 
                 time_acq = int(self.settings.child('acquisition', 'acq_time').value() * 1000)  # in ms
                 self.general_timer.stop()
@@ -330,38 +388,6 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
         except Exception as e:
             self.emit_status(ThreadCommand('Update_Status', [getLineInfo() + str(e), "log"]))
 
-    def init_histo_group(self):
-
-        mode = self.settings.child('acquisition', 'acq_type').value()
-        if mode == 'Counting' or mode == 'Histo' or mode == 'T3':
-            super(DAQ_2DViewer_FLIM, self).init_histo_group()
-        else:
-
-            histo_group = self.h5file.create_group(self.h5file.root, 'histograms')
-            self.histo_array = self.h5file.create_carray(histo_group, 'histogram', obj=self.datas,
-                                                         title='histogram')
-            x_axis = self.get_xaxis()
-            xarray = self.h5file.create_carray(histo_group, "x_axis", obj=x_axis['data'], title='x_axis')
-            xarray.attrs['shape'] = xarray.shape
-            xarray.attrs['type'] = 'signal_axis'
-            xarray.attrs['data_type'] = '1D'
-
-            navxarray = self.h5file.create_carray(self.h5file.root, 'scan_x_axis_unique', obj=self.get_nav_xaxis(),
-                                                  title='data')
-            navxarray.set_attr('shape', navxarray.shape)
-            navxarray.attrs['type'] = 'navigation_axis'
-            navxarray.attrs['data_type'] = '1D'
-
-            navyarray = self.h5file.create_carray(self.h5file.root, 'scan_y_axis_unique', obj=self.get_nav_yaxis(),
-                                                  title='data')
-            navyarray.set_attr('shape', navyarray.shape)
-            navyarray.attrs['type'] = 'navigation_axis'
-            navyarray.attrs['data_type'] = '1D'
-
-            self.histo_array._v_attrs['data_type'] = '1D'
-            self.histo_array._v_attrs['type'] = 'histo_data'
-            self.histo_array._v_attrs['shape'] = self.datas.shape
-            self.histo_array._v_attrs['scan_type'] = 'Scan2D'
 
     def prepare_moves(self):
         """
@@ -392,14 +418,14 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
 
         offset = self.settings.child('stage_settings', 'stage_x', 'offset_x').value()
         if self.settings.child('stage_settings', 'stage_x', 'stage_x_direction').value() == 'Normal':
-            scaling_x = 1
-        else:
             scaling_x = -1
+        else:
+            scaling_x = 1
 
         if self.settings.child('stage_settings', 'stage_y', 'stage_y_direction').value() == 'Normal':
-            scaling_y = 1
-        else:
             scaling_y = -1
+        else:
+            scaling_y = +1
         if self.settings.child('stage_settings', 'stage_x', 'stage_x_axis').value() == 'X':
             ind_x = 0
         else:
@@ -422,7 +448,7 @@ class DAQ_2DViewer_FLIM(DAQ_1DViewer_TH260):
         super(DAQ_2DViewer_FLIM, self).stop()
         self.stop_scanner.emit()
         try:
-            self.move_at_navigator(*self.scan_parameters.positions[0][0:2])
+            self.move_at_navigator(0, 0)
         except:
             pass
 

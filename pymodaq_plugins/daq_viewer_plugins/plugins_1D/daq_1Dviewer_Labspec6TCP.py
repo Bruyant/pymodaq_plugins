@@ -1,15 +1,31 @@
+"""
+Plugin to use with Labspec6 controlled Spectrometer from Horiba-Jobin-Yvon
+Use the RAMAN-AFM systems reversed interconnection protocol for LabSpec 6 Version 0.6.2
+It consists in a TCP/IP connection between pymodaq (client) and Labspec (Server) andlet the client get/set some
+parameters and grab spectra and retrieve data
+
+Issue: The protocol in version 0.6.2 doesn't update the exposure time in Labspec GUI but still take it into account.
+Issue: Binning: issue with the server, it says it doesnt recognise the binning command but set its value nevertheless
+This plugin use a wrapper in hardware/horiba/labspec6.py => Labspec6Client that deals with TCP/IP commands and retrieves
+data
+
+"""
+
+
+
 from PyQt5.QtCore import QThread
 from PyQt5 import QtWidgets
 from pymodaq.daq_viewer.utility_classes import DAQ_Viewer_base
 import numpy as np
 from easydict import EasyDict as edict
 from collections import OrderedDict
-from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, gauss1D, linspace_step
+from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo, gauss1D, linspace_step, DataFromPlugins, Axis
 from pymodaq.daq_viewer.utility_classes import comon_parameters
 from pyqtgraph.parametertree import Parameter, ParameterTree
 import pyqtgraph.parametertree.parameterTypes as pTypes
 import pymodaq.daq_utils.custom_parameter_tree as custom_tree
 from pymodaq_plugins.hardware.horiba.labspec6 import Labspec6Client
+
 
 
 
@@ -23,6 +39,8 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
                 {'title': 'Controller', 'name': 'controllerid', 'type': 'str', 'value': '', 'readonly': True},
                 {'title': 'IP', 'name': 'ip_address', 'type': 'str', 'value': 'localhost'},
                 {'title': 'Port', 'name': 'port', 'type': 'int', 'value': 1234},
+                {'title': 'Timeout multiplicator:', 'name': 'timeout', 'type': 'int', 'value': 5,
+                        'tooltip': 'theacquisition time is multiplied by this factor to get proper timeout'},
                 ]
              },
             {'title': 'Acquisition Parameters', 'name': 'acq_params', 'type': 'group', 'children': [
@@ -30,6 +48,7 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
                 {'title': 'Exp. Time (s)', 'name': 'exposure', 'type': 'float', 'value': 1.0, 'min': 0.001},
                 {'title': 'Accumulation', 'name': 'accumulations', 'type': 'int', 'value': 1, 'min': 1},
                 {'title': 'Binning', 'name': 'binning', 'type': 'int', 'value': 1, 'min': 1},
+                {'title': 'Npts Map', 'name': 'npts_map', 'type': 'int', 'value': 2, 'min': 1, 'visible': False}, #only there to enable fast scan without having to send a list of points at each grab
                 ]
              },
             {'title': 'Instrument setup', 'name': 'inst_setup', 'type': 'group', 'children': [
@@ -67,21 +86,30 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
             set_Mock_data
         """
         if param.name() == 'wavelength':
+            self.controller.timeout = 100 # so that the wavelentgh has time to settle
             self.controller.wavelength = param.value()
+            self.controller_ready = False
         elif param.name() == 'exposure':
             self.controller.exposure = param.value()
         elif param.name() == 'accumulations':
             self.controller.accumulations = param.value()
         elif param.name() == 'binning':
             self.controller.binning = param.value()
+            self.controller_ready = False
         elif param.name() == 'grating':
+            self.controller.timeout = 100 # so that the wavelentgh has time to settle
             self.controller.grating = param.value()
+            self.controller_ready = False
         elif param.name() == 'laser':
             self.controller.laser = param.value()
         elif param.name() == 'hole':
             self.controller.hole = param.value()
         elif param.name() == 'slit':
             self.controller.slit = param.value()
+        elif param.name() == 'npts_map':
+            self.controller_ready = False
+        elif param.name() == 'timeout':
+            self.controller.timeout_mult = param.value()
 
     def set_spectro_wl(self, spectro_wl):
         """
@@ -148,13 +176,14 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
                     raise IOError('Wrong return from Server')
                 self.settings.child('connection',  'controllerid').setValue(data)
 
+            self.controller.timeout_mult = self.settings.child('connection', 'timeout').value()
             self.init_params()
 
             # initialize viewers with the future type of data
             self.x_axis = self.controller.get_x_axis()
 
-            self.data_grabed_signal_temp.emit([OrderedDict(name='LabSpec6', data=[self.x_axis*0], type='Data1D',
-                x_axis=dict(data=self.x_axis, units='nm', label='Wavelength'), labels=['Spectrum']),])
+            self.data_grabed_signal_temp.emit([DataFromPlugins(name='LabSpec6', data=[self.x_axis*0], dim='Data1D',
+                x_axis=Axis(data=self.x_axis, units='nm', label='Wavelength'), labels=['Spectrum']),])
 
             self.status.initialized = True
             self.status.controller = self.controller
@@ -175,11 +204,12 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
 
     def init_params(self):
         for child in self.settings.child(('acq_params')).children():
-            data = getattr(self.controller, child.name())
-            if data is not None:
-                child.setValue(data)
-            else:
-                child.hide()
+            if child.name() != 'npts_map':
+                data = getattr(self.controller, child.name())
+                if data is not None:
+                    child.setValue(data)
+                else:
+                    child.hide()
 
         child = self.settings.child('inst_setup', 'grating')
         ind, data = self.controller.get_gratings()
@@ -216,7 +246,7 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
         """
         Naverage = 1
         if not self.controller_ready:
-            ret = self.controller.prepare_one_acquisition()
+            ret = self.controller.prepare_N_acquisition(self.settings.child('acq_params', 'npts_map').value())
             if ret == 'ready':
                 self.controller_ready = True
             else:
@@ -228,8 +258,8 @@ class DAQ_1DViewer_Labspec6TCP(DAQ_Viewer_base):
         if data is None:
             self.emit_status(ThreadCommand('Update_Status', ['No data from spectrometer', 'log']))
             data = self.controller.wavelength_axis * 0
-        self.data_grabed_signal.emit([OrderedDict(name='LabSpec6', data=[data], type='Data1D',
-                            x_axis=dict(data=self.controller.wavelength_axis, units='nm', label='Wavelength'))])
+        self.data_grabed_signal.emit([DataFromPlugins(name='LabSpec6', data=[data], dim='Data1D',
+                            x_axis=Axis(data=self.controller.wavelength_axis, units='nm', label='Wavelength'))])
 
     def stop(self):
         """
