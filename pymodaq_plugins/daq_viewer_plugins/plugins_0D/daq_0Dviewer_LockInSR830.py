@@ -232,4 +232,9 @@ class DAQ_0DViewer_LockInSR830(DAQ_Viewer_base):
         """
         self.controller.close()
 
+    def stop(self):
+         """
+             not implemented.
+         """
+         return "Stopped grab"
 
